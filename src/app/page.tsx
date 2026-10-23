@@ -1,69 +1,339 @@
-import Image from "next/image";
+"use client";
+
+import { useEffect, useState } from "react";
+import { sendTestNotification } from "./actions";
 import styles from "./page.module.css";
 
+export const maxDuration = 120;
+
+function applicationServerKey(value: string): ArrayBuffer {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const decoded = window.atob(base64);
+  const bytes = new Uint8Array(decoded.length);
+
+  for (let index = 0; index < decoded.length; index += 1) {
+    bytes[index] = decoded.charCodeAt(index);
+  }
+
+  return bytes.buffer;
+}
+
 export default function Home() {
+  const [registration, setRegistration] =
+    useState<ServiceWorkerRegistration | null>(null);
+  const [subscription, setSubscription] = useState<PushSubscription | null>(
+    null,
+  );
+  const [supported, setSupported] = useState(false);
+  const [needsInstall, setNeedsInstall] = useState(false);
+  const [checked, setChecked] = useState(false);
+  const [accessCode, setAccessCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("Meldingen controleren…");
+
+  const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+
+  useEffect(() => {
+    let active = true;
+
+    async function initialise() {
+      const ios =
+        /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+      const standalone =
+        window.matchMedia("(display-mode: standalone)").matches ||
+        (navigator as Navigator & { standalone?: boolean }).standalone === true;
+
+      if (ios && !standalone) {
+        if (active) {
+          setNeedsInstall(true);
+          setMessage("Voeg Daykit eerst toe aan je beginscherm.");
+          setChecked(true);
+        }
+
+        return;
+      }
+
+      const canPush =
+        window.isSecureContext &&
+        "serviceWorker" in navigator &&
+        "PushManager" in window &&
+        "Notification" in window;
+
+      if (!canPush) {
+        if (active) {
+          setMessage("Pushmeldingen zijn hier niet beschikbaar.");
+          setChecked(true);
+        }
+
+        return;
+      }
+
+      try {
+        await navigator.serviceWorker.register("/sw.js", {
+          scope: "/",
+          updateViaCache: "none",
+        });
+
+        const readyRegistration = await navigator.serviceWorker.ready;
+        const existing = await readyRegistration.pushManager.getSubscription();
+
+        if (!active) {
+          return;
+        }
+
+        setSupported(true);
+        setRegistration(readyRegistration);
+        setSubscription(existing);
+        setMessage(
+          Notification.permission === "denied"
+            ? "Meldingen zijn geblokkeerd. Sta ze toe via je toestelinstellingen."
+            : existing
+              ? "Dit toestel is klaar om meldingen te ontvangen."
+              : "Schakel meldingen in om te beginnen.",
+        );
+      } catch {
+        if (active) {
+          setMessage("Meldingen voorbereiden is mislukt. Herlaad de app.");
+        }
+      } finally {
+        if (active) {
+          setChecked(true);
+        }
+      }
+    }
+
+    void initialise();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function enableNotifications() {
+    if (!registration || !publicKey || busy) {
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      // Vraag toestemming rechtstreeks vanuit de tik op de knop.
+      const permission = await Notification.requestPermission();
+
+      if (permission !== "granted") {
+        setMessage(
+          permission === "denied"
+            ? "Meldingen zijn geblokkeerd. Sta ze toe via je toestelinstellingen."
+            : "Je hebt nog geen toestemming gegeven.",
+        );
+        return;
+      }
+
+      const current = await registration.pushManager.getSubscription();
+
+      const next =
+        current ??
+        (await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: applicationServerKey(publicKey),
+        }));
+
+      setSubscription(next);
+      setMessage("Meldingen staan aan. Stuur je eerste test!");
+    } catch {
+      setMessage(
+        "Inschakelen is mislukt. Controleer je verbinding en probeer opnieuw.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disableNotifications() {
+    if (!subscription || busy) {
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      const removed = await subscription.unsubscribe();
+
+      if (!removed) {
+        setMessage("Uitschakelen is niet gelukt. Probeer opnieuw.");
+        return;
+      }
+
+      setSubscription(null);
+      setMessage("De pushregistratie op dit toestel is uitgeschakeld.");
+    } catch {
+      setMessage("Uitschakelen is niet gelukt. Probeer opnieuw.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function send(delaySeconds: 0 | 60) {
+    if (!subscription || !accessCode.trim() || busy) {
+      return;
+    }
+
+    setBusy(true);
+    setMessage(
+      delaySeconds === 60
+        ? "Je test voor over 60 seconden voorbereiden…"
+        : "Je testmelding versturen…",
+    );
+
+    try {
+      const result = await sendTestNotification(
+        subscription.toJSON(),
+        accessCode.trim(),
+        delaySeconds,
+      );
+
+      if (!result.ok) {
+        setMessage(result.error);
+        return;
+      }
+
+      setMessage(
+        result.delayed
+          ? "Test gestart! Vergrendel je iPhone. De server probeert over 60 seconden je melding te sturen."
+          : "De pushdienst heeft je melding geaccepteerd. Controleer je meldingen.",
+      );
+    } catch {
+      setMessage("De server kon niet bereikt worden. Probeer opnieuw.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className={styles.intro}>
-          <h1>
-            To get started, edit the{" "}
-            <code className={styles.code}>page.tsx</code> file.
-          </h1>
+    <main className={styles.page}>
+      <div className={styles.container}>
+        <header className={styles.header}>
+          <span className={styles.logo} aria-hidden="true">
+            ✦
+          </span>
+          <span>daykit</span>
+          <span className={styles.label}>Eerste test</span>
+        </header>
+
+        <section className={styles.intro}>
+          <p className={styles.eyebrow}>Een kleine ping. Een groot begin.</p>
+          <h1>Even testen of we je kunnen bereiken.</h1>
           <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
+            Zet meldingen aan, stuur een test en probeer het daarna met je
+            iPhone op slot.
           </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        </section>
+
+        <section className={styles.card} aria-labelledby="notifications-title">
+          <div className={styles.cardHeader}>
+            <span className={styles.bell} aria-hidden="true">
+              ↗
+            </span>
+            <div>
+              <h2 id="notifications-title">Jouw meldingen</h2>
+              <p>
+                {subscription
+                  ? "Ingeschakeld op dit toestel"
+                  : "Nog niet actief"}
+              </p>
+            </div>
+          </div>
+
+          {needsInstall ? (
+            <div className={styles.install}>
+              <h3>Eerst op je beginscherm</h3>
+              <ol>
+                <li>Open deze website in Safari.</li>
+                <li>Tik op de deelknop.</li>
+                <li>Kies ‘Zet op beginscherm’.</li>
+                <li>Open Daykit via het nieuwe icoon.</li>
+              </ol>
+            </div>
+          ) : (
+            <>
+              {!subscription && (
+                <button
+                  className={styles.primary}
+                  onClick={enableNotifications}
+                  disabled={
+                    !checked ||
+                    !supported ||
+                    !registration ||
+                    !publicKey ||
+                    busy
+                  }
+                >
+                  {busy ? "Even wachten…" : "Meldingen inschakelen"}
+                </button>
+              )}
+
+              {subscription && (
+                <div className={styles.controls}>
+                  <label className={styles.field}>
+                    <span>Je testcode</span>
+                    <input
+                      type="password"
+                      value={accessCode}
+                      onChange={(event) => setAccessCode(event.target.value)}
+                      placeholder="Voer je testcode in"
+                      autoComplete="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                    />
+                  </label>
+
+                  <button
+                    className={styles.primary}
+                    onClick={() => send(0)}
+                    disabled={busy || !accessCode.trim()}
+                  >
+                    {busy ? "Even wachten…" : "Stuur een testmelding"}
+                  </button>
+
+                  <button
+                    className={styles.secondary}
+                    onClick={() => send(60)}
+                    disabled={busy || !accessCode.trim()}
+                  >
+                    Test over 60 seconden
+                  </button>
+
+                  <button
+                    className={styles.textButton}
+                    onClick={disableNotifications}
+                    disabled={busy}
+                  >
+                    Meldingen uitschakelen
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          <p className={styles.status} role="status" aria-live="polite">
+            {message}
+          </p>
+
+          {checked && supported && !publicKey && (
+            <p className={styles.status}>
+              De publieke pushsleutel ontbreekt nog in de appconfiguratie.
+            </p>
+          )}
+        </section>
+
+        <p className={styles.footnote}>
+          Geen melding gezien? Controleer of Focus of het meldingenoverzicht de
+          melding tegenhoudt.
+        </p>
+      </div>
+    </main>
   );
 }
