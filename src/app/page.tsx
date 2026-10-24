@@ -28,7 +28,6 @@ export default function Home() {
   const [supported, setSupported] = useState(false);
   const [needsInstall, setNeedsInstall] = useState(false);
   const [checked, setChecked] = useState(false);
-  const [accessCode, setAccessCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Meldingen controleren…");
 
@@ -120,7 +119,6 @@ export default function Home() {
     setBusy(true);
 
     try {
-      // Vraag toestemming rechtstreeks vanuit de tik op de knop.
       const permission = await Notification.requestPermission();
 
       if (permission !== "granted") {
@@ -177,7 +175,7 @@ export default function Home() {
   }
 
   async function send(delaySeconds: 0 | 60) {
-    if (!subscription || !accessCode.trim() || busy) {
+    if (!subscription || busy) {
       return;
     }
 
@@ -191,7 +189,6 @@ export default function Home() {
     try {
       const result = await sendTestNotification(
         subscription.toJSON(),
-        accessCode.trim(),
         delaySeconds,
       );
 
@@ -277,23 +274,10 @@ export default function Home() {
 
               {subscription && (
                 <div className={styles.controls}>
-                  <label className={styles.field}>
-                    <span>Je testcode</span>
-                    <input
-                      type="password"
-                      value={accessCode}
-                      onChange={(event) => setAccessCode(event.target.value)}
-                      placeholder="Voer je testcode in"
-                      autoComplete="off"
-                      autoCapitalize="none"
-                      spellCheck={false}
-                    />
-                  </label>
-
                   <button
                     className={styles.primary}
                     onClick={() => send(0)}
-                    disabled={busy || !accessCode.trim()}
+                    disabled={busy}
                   >
                     {busy ? "Even wachten…" : "Stuur een testmelding"}
                   </button>
@@ -301,7 +285,7 @@ export default function Home() {
                   <button
                     className={styles.secondary}
                     onClick={() => send(60)}
-                    disabled={busy || !accessCode.trim()}
+                    disabled={busy}
                   >
                     Test over 60 seconden
                   </button>

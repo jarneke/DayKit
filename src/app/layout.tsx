@@ -1,5 +1,10 @@
+import { Suspense } from "react";
+import type { ReactNode } from "react";
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { getSession, hasPasskeys } from "@/lib/auth";
+import Access from "./access";
+import accessStyles from "./access.module.css";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -28,14 +33,40 @@ export const viewport: Viewport = {
   themeColor: "#f6f3ef",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+async function AccessBoundary({ children }: { children: ReactNode }) {
+  const session = await getSession();
+  const passkeysAvailable = await hasPasskeys();
+
+  if (!session) {
+    return <Access mode="login" hasPasskeys={passkeysAvailable} />;
+  }
+
+  return (
+    <>
+      {children}
+      <Access
+        mode="settings"
+        hasPasskeys={passkeysAvailable}
+        expiresAt={session.expiresAt}
+      />
+    </>
+  );
+}
+
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="nl" className={`${geistSans.variable} ${geistMono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <Suspense
+          fallback={
+            <div className={accessStyles.loading} role="status">
+              Daykit openen…
+            </div>
+          }
+        >
+          <AccessBoundary>{children}</AccessBoundary>
+        </Suspense>
+      </body>
     </html>
   );
 }

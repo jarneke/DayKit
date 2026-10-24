@@ -1,8 +1,9 @@
 "use server";
 
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { after } from "next/server";
 import webpush from "web-push";
+import { getSession } from "@/lib/auth";
 
 type SubscriptionInput = {
     endpoint: string;
@@ -15,13 +16,6 @@ type SubscriptionInput = {
 type TestResult =
     | { ok: true; delayed: boolean }
     | { ok: false; error: string };
-
-function validAccessCode(input: string, expected: string) {
-    const inputHash = createHash("sha256").update(input).digest();
-    const expectedHash = createHash("sha256").update(expected).digest();
-
-    return timingSafeEqual(inputHash, expectedHash);
-}
 
 function isSubscription(input: unknown): input is SubscriptionInput {
     if (!input || typeof input !== "object") {
@@ -75,29 +69,25 @@ function isSubscription(input: unknown): input is SubscriptionInput {
 
 export async function sendTestNotification(
     subscription: unknown,
-    accessCode: string,
     delaySeconds: number,
 ): Promise<TestResult> {
-    const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-    const privateKey = process.env.VAPID_PRIVATE_KEY;
-    const subject = process.env.VAPID_SUBJECT;
-    const expectedCode = process.env.TEST_ACCESS_CODE;
+    const session = await getSession();
 
-    if (!publicKey || !privateKey || !subject || !expectedCode) {
+    if (!session) {
         return {
             ok: false,
-            error: "De pushconfiguratie op de server is nog niet volledig.",
+            error: "Je sessie is verlopen. Heropen Daykit en ontgrendel opnieuw.",
         };
     }
 
-    if (
-        typeof accessCode !== "string" ||
-        accessCode.length > 256 ||
-        !validAccessCode(accessCode, expectedCode)
-    ) {
+    const publicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+    const privateKey = process.env.VAPID_PRIVATE_KEY;
+    const subject = process.env.VAPID_SUBJECT;
+
+    if (!publicKey || !privateKey || !subject) {
         return {
             ok: false,
-            error: "De testcode klopt niet.",
+            error: "De pushconfiguratie op de server is nog niet volledig.",
         };
     }
 
