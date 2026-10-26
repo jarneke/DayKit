@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import {
   startAuthentication,
@@ -47,24 +47,22 @@ async function requestAuth<T>(
 
 function checkPasskeySupport() {
   if (!window.isSecureContext || !window.PublicKeyCredential) {
-    throw new Error(
-      "Passkeys zijn hier niet beschikbaar. Gebruik je toegangscode.",
-    );
+    throw new Error("Passkeys zijn hier niet beschikbaar. Gebruik je pincode.");
   }
 }
 
 function errorMessage(error: unknown) {
   if (error instanceof Error) {
     if (error.name === "NotAllowedError" || error.name === "AbortError") {
-      return "Ontgrendelen is geannuleerd of verlopen. Je kunt opnieuw proberen.";
+      return "De aanvraag is geannuleerd of verlopen. Je kunt opnieuw proberen.";
     }
 
     if (error.name === "InvalidStateError") {
-      return "Er is al een passkey beschikbaar bij deze wachtwoordbeheerder.";
+      return "Deze wachtwoordbeheerder heeft al een passkey voor Daykit.";
     }
 
     if (error.name === "SecurityError") {
-      return "Deze passkey kan hier niet gebruikt worden. Probeer je toegangscode.";
+      return "Deze passkey kan hier niet gebruikt worden. Gebruik je pincode.";
     }
 
     return error.message;
@@ -74,10 +72,13 @@ function errorMessage(error: unknown) {
 }
 
 export default function Access({ mode, hasPasskeys, expiresAt }: AccessProps) {
-  const [code, setCode] = useState("");
+  const [pin, setPin] = useState("");
+  const [showPin, setShowPin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [passkeyAvailable, setPasskeyAvailable] = useState(hasPasskeys);
+
+  const inFlight = useRef(false);
   const settings = mode === "settings";
 
   useEffect(() => {
@@ -87,7 +88,7 @@ export default function Access({ mode, hasPasskeys, expiresAt }: AccessProps) {
 
     function checkExpiry() {
       if (expiresAt && Date.now() >= expiresAt) {
-        window.location.replace("/");
+        window.location.replace("/login");
       }
     }
 
@@ -115,33 +116,45 @@ export default function Access({ mode, hasPasskeys, expiresAt }: AccessProps) {
     };
   }, [settings, expiresAt]);
 
-  async function unlockWithCode(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (busy) {
-      return;
+  function beginRequest() {
+    if (inFlight.current) {
+      return false;
     }
 
+    inFlight.current = true;
     setBusy(true);
     setMessage("");
 
+    return true;
+  }
+
+  function finishRequest() {
+    inFlight.current = false;
+    setBusy(false);
+  }
+
+  async function unlockWithPin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!/^\d{6}$/.test(pin) || !beginRequest()) {
+      return;
+    }
+
     try {
-      await requestAuth("code", { code });
-      setCode("");
+      await requestAuth("code", { code: pin });
+      setPin("");
       window.location.replace("/");
     } catch (error) {
+      setPin("");
       setMessage(errorMessage(error));
-      setBusy(false);
+      finishRequest();
     }
   }
 
   async function unlockWithPasskey() {
-    if (busy) {
+    if (!beginRequest()) {
       return;
     }
-
-    setBusy(true);
-    setMessage("");
 
     try {
       checkPasskeySupport();
@@ -154,20 +167,18 @@ export default function Access({ mode, hasPasskeys, expiresAt }: AccessProps) {
       const response = await startAuthentication({ optionsJSON });
 
       await requestAuth("authentication-verify", { response });
+
       window.location.replace("/");
     } catch (error) {
       setMessage(errorMessage(error));
-      setBusy(false);
+      finishRequest();
     }
   }
 
   async function registerPasskey() {
-    if (busy) {
+    if (!beginRequest()) {
       return;
     }
-
-    setBusy(true);
-    setMessage("");
 
     try {
       checkPasskeySupport();
@@ -183,29 +194,26 @@ export default function Access({ mode, hasPasskeys, expiresAt }: AccessProps) {
 
       setPasskeyAvailable(true);
       setMessage(
-        "Je passkey is opgeslagen. Vergrendel Daykit om het ontgrendelen te proberen.",
+        "Je passkey is opgeslagen. Log uit om het inloggen met je passkey te proberen.",
       );
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
-      setBusy(false);
+      finishRequest();
     }
   }
 
-  async function lock() {
-    if (busy) {
+  async function logout() {
+    if (!beginRequest()) {
       return;
     }
 
-    setBusy(true);
-    setMessage("");
-
     try {
       await requestAuth("logout");
-      window.location.replace("/");
+      window.location.replace("/login");
     } catch (error) {
       setMessage(errorMessage(error));
-      setBusy(false);
+      finishRequest();
     }
   }
 
@@ -216,19 +224,20 @@ export default function Access({ mode, hasPasskeys, expiresAt }: AccessProps) {
           <span className={styles.symbol} aria-hidden="true">
             ✦
           </span>
+
           <div>
             <h2 id="access-title">Jouw toegang</h2>
             <p>
               {passkeyAvailable
-                ? "Een passkey is ingesteld."
-                : "Stel snel ontgrendelen in."}
+                ? "Er is een passkey ingesteld."
+                : "Voeg je eerste passkey toe."}
             </p>
           </div>
         </div>
 
         <p className={styles.explanation}>
           Met een passkey bevestig je de toegang op je toestel. Op je iPhone kan
-          dat met Face ID of je toestelcode.
+          dat met Face ID, Touch ID of je toestelcode.
         </p>
 
         <div className={styles.buttons}>
@@ -241,23 +250,23 @@ export default function Access({ mode, hasPasskeys, expiresAt }: AccessProps) {
             {busy
               ? "Even wachten…"
               : passkeyAvailable
-                ? "Nog een passkey instellen"
-                : "Snel ontgrendelen instellen"}
+                ? "Nog een passkey toevoegen"
+                : "Passkey instellen"}
           </button>
 
           <button
             type="button"
             className={styles.secondary}
-            onClick={lock}
+            onClick={logout}
             disabled={busy}
           >
-            Vergrendelen
+            Uitloggen
           </button>
         </div>
 
         <p className={styles.hint}>
-          Je sessie blijft maximaal 12 uur geldig. Vergrendelen meldt dit
-          toestel meteen af.
+          Je blijft maximaal zeven dagen ingelogd. Uitloggen beëindigt de sessie
+          op dit toestel.
         </p>
 
         {message && (
@@ -285,75 +294,87 @@ export default function Access({ mode, hasPasskeys, expiresAt }: AccessProps) {
         <div className={styles.intro}>
           <p className={styles.eyebrow}>Jouw dag, op één plek.</p>
           <h1>Welkom terug.</h1>
-          <p>Ontgrendel je persoonlijke Daykit.</p>
+          <p>Log in met je passkey of je pincode.</p>
         </div>
 
-        <section className={styles.loginCard} aria-label="Daykit ontgrendelen">
-          {passkeyAvailable && (
-            <>
-              <button
-                type="button"
-                className={styles.primary}
-                onClick={unlockWithPasskey}
-                disabled={busy}
-              >
-                {busy ? "Even wachten…" : "Ontgrendelen met passkey"}
-              </button>
+        <section className={styles.loginCard} aria-label="Inloggen bij Daykit">
+          <button
+            type="button"
+            className={styles.primary}
+            onClick={unlockWithPasskey}
+            disabled={busy}
+          >
+            {busy ? "Even wachten…" : "Inloggen met passkey"}
+          </button>
 
-              <p className={styles.passkeyHint}>
-                Gebruik Face ID, je vingerafdruk of je toestelcode.
-              </p>
+          <p className={styles.passkeyHint}>
+            Bevestig op je toestel, bijvoorbeeld met Face ID.
+          </p>
 
-              <div className={styles.divider}>
-                <span>of met je toegangscode</span>
-              </div>
-            </>
-          )}
+          <div className={styles.divider}>
+            <span>of met je pincode</span>
+          </div>
 
-          <form className={styles.form} onSubmit={unlockWithCode}>
-            <label className={styles.field} htmlFor="daykit-code">
-              Toegangscode
+          <form className={styles.form} onSubmit={unlockWithPin}>
+            <label className={styles.field} htmlFor="daykit-pin">
+              Pincode
             </label>
 
             <input
-              id="daykit-code"
-              name="password"
-              type="password"
+              id="daykit-pin"
+              name="pin"
+              type={showPin ? "text" : "password"}
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              autoComplete="off"
               className={styles.input}
-              value={code}
-              onChange={(event) => setCode(event.target.value)}
-              placeholder="Voer je code in"
-              autoComplete="current-password"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              minLength={8}
-              maxLength={128}
+              value={pin}
+              onChange={(event) => {
+                setPin(event.target.value.replace(/\D/g, "").slice(0, 6));
+                setMessage("");
+              }}
+              placeholder="Je 6-cijferige pincode"
+              minLength={6}
+              maxLength={6}
               disabled={busy}
+              aria-describedby={message ? "daykit-login-message" : undefined}
               required
             />
 
             <button
-              type="submit"
-              className={passkeyAvailable ? styles.secondary : styles.primary}
-              disabled={busy || code.length < 8}
+              type="button"
+              className={styles.secondary}
+              onClick={() => setShowPin((value) => !value)}
+              aria-pressed={showPin}
+              disabled={busy}
             >
-              {busy ? "Even wachten…" : "Ontgrendelen met code"}
+              {showPin ? "Pincode verbergen" : "Pincode tonen"}
+            </button>
+
+            <button
+              type="submit"
+              className={styles.primary}
+              disabled={busy || pin.length !== 6}
+            >
+              {busy ? "Even wachten…" : "Inloggen met pincode"}
             </button>
           </form>
 
           {message && (
-            <p className={styles.message} role="status" aria-live="polite">
+            <p
+              id="daykit-login-message"
+              className={styles.message}
+              role="alert"
+            >
               {message}
             </p>
           )}
         </section>
 
-        {!passkeyAvailable && (
-          <p className={styles.loginNote}>
-            Na het inloggen kun je snel ontgrendelen met een passkey instellen.
-          </p>
-        )}
+        <p className={styles.loginNote}>
+          Nog geen passkey? Log eerst in met je pincode. Daarna kun je een
+          passkey instellen.
+        </p>
       </div>
     </main>
   );

@@ -1,10 +1,9 @@
-import { Suspense } from "react";
 import type { ReactNode } from "react";
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { getSession, hasPasskeys } from "@/lib/auth";
-import Access from "./access";
-import accessStyles from "./access.module.css";
+import DayCycle from "./day-cycle";
+import LiquidGlass from "./liquid-glass";
+import styles from "./day-cycle.module.css";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -23,49 +22,24 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     title: "Daykit",
-    statusBarStyle: "default",
+    statusBarStyle: "black-translucent",
   },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#f6f3ef",
+  viewportFit: "cover",
+  themeColor: "#080d1b",
 };
-
-async function AccessBoundary({ children }: { children: ReactNode }) {
-  const session = await getSession();
-  const passkeysAvailable = await hasPasskeys();
-
-  if (!session) {
-    return <Access mode="login" hasPasskeys={passkeysAvailable} />;
-  }
-
-  return (
-    <>
-      {children}
-      <Access
-        mode="settings"
-        hasPasskeys={passkeysAvailable}
-        expiresAt={session.expiresAt}
-      />
-    </>
-  );
-}
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="nl" className={`${geistSans.variable} ${geistMono.variable}`}>
       <body>
-        <Suspense
-          fallback={
-            <div className={accessStyles.loading} role="status">
-              Daykit openen…
-            </div>
-          }
-        >
-          <AccessBoundary>{children}</AccessBoundary>
-        </Suspense>
+        <DayCycle />
+        <div className={styles.content}>{children}</div>
+        <LiquidGlass />
       </body>
     </html>
   );

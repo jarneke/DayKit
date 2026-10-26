@@ -1,0 +1,50 @@
+.background {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  height: 100lvh;
+  overflow: hidden;
+  background: #080d1b;
+  pointer-events: none;
+  user-select: none;
+}
+
+.layer {
+  position: absolute;
+  inset: 0;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  opacity: 0;
+  transition: opacity 1800ms ease-in-out;
+}
+
+.morning {
+  background-image: url("/daykit-morning.png");
+}
+
+.afternoon {
+  background-image: url("/daykit-afternoon.png");
+}
+
+.evening {
+  background-image: url("/daykit-evening.png");
+}
+
+.background[data-period="morning"] .morning,
+.background[data-period="afternoon"] .afternoon,
+.background[data-period="evening"] .evening {
+  opacity: 1;
+}
+
+.content {
+  position: relative;
+  z-index: 1;
+  min-height: 100svh;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .layer {
+    transition: none;
+  }
+}

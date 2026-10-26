@@ -6,7 +6,7 @@ import { neon } from "@neondatabase/serverless";
 import { cookies } from "next/headers";
 
 const deriveKey = promisify(scrypt);
-const SESSION_SECONDS = 12 * 60 * 60;
+const SESSION_SECONDS = 7 * 24 * 60 * 60;
 const CHALLENGE_SECONDS = 5 * 60;
 
 export class AuthError extends Error {
@@ -30,29 +30,37 @@ export function database() {
 }
 
 export function authConfig() {
-    const configuredOrigin =
+    const development = process.env.NODE_ENV === "development";
+
+    const productionOrigin =
         process.env.DAYKIT_ORIGIN?.trim() ||
-        (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "");
+        (process.env.VERCEL_PROJECT_PRODUCTION_URL
+            ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL.trim()}`
+            : "");
+
+    const configuredOrigin = development
+        ? "http://localhost:3000"
+        : productionOrigin;
 
     if (!configuredOrigin) {
-        throw new Error("DAYKIT_ORIGIN ontbreekt.");
+        throw new Error("Het vaste productieadres van Daykit ontbreekt.");
     }
 
     const url = new URL(configuredOrigin);
-    const localDevelopment =
-        process.env.NODE_ENV === "development" &&
-        url.protocol === "http:" &&
-        url.hostname === "localhost";
+
+    const validProtocol = development
+        ? url.protocol === "http:" && url.hostname === "localhost"
+        : url.protocol === "https:";
 
     if (
-        (!localDevelopment && url.protocol !== "https:") ||
+        !validProtocol ||
         url.username ||
         url.password ||
         url.pathname !== "/" ||
         url.search ||
         url.hash
     ) {
-        throw new Error("DAYKIT_ORIGIN moet een geldig websiteadres zijn.");
+        throw new Error("Het websiteadres van Daykit is ongeldig.");
     }
 
     return {
@@ -62,7 +70,7 @@ export function authConfig() {
     };
 }
 
-function cookieName(kind: "session" | "challenge") {
+export function cookieName(kind: "session" | "challenge") {
     return authConfig().secure
         ? `__Host-daykit-${kind}`
         : `daykit-${kind}`;
@@ -89,15 +97,20 @@ export type Session = {
     expiresAt: number;
 };
 
-export async function getSession(): Promise<Session | null> {
-    const store = await cookies();
-    const token = store.get(cookieName("session"))?.value;
+export async function getSession(
+    suppliedToken?: string | null,
+): Promise<Session | null> {
+    const token =
+        suppliedToken === undefined
+            ? (await cookies()).get(cookieName("session"))?.value
+            : suppliedToken;
 
     if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) {
         return null;
     }
 
     const sql = database();
+
     const rows = await sql`
     SELECT
       s.token_hash,
@@ -129,7 +142,10 @@ export async function requireSession() {
     const session = await getSession();
 
     if (!session) {
-        throw new AuthError("Je sessie is verlopen. Ontgrendel Daykit opnieuw.", 401);
+        throw new AuthError(
+            "Je sessie is verlopen. Log opnieuw in.",
+            401,
+        );
     }
 
     return session;
@@ -149,8 +165,16 @@ export async function createSession() {
   `;
 
     await sql`
-    INSERT INTO public.daykit_session (token_hash, owner_id, expires_at)
-    VALUES (${hashToken(token)}, 'owner', ${expiresAt.toISOString()})
+    INSERT INTO public.daykit_session (
+      token_hash,
+      owner_id,
+      expires_at
+    )
+    VALUES (
+      ${hashToken(token)},
+      'owner',
+      ${expiresAt.toISOString()}
+    )
   `;
 
     store.set(
@@ -180,17 +204,20 @@ export async function destroySession() {
 }
 
 export async function verifyAccessCode(input: unknown) {
-    if (typeof input !== "string" || input.length < 8 || input.length > 128) {
+    if (typeof input !== "string" || !/^\d{6}$/.test(input)) {
         return false;
     }
 
     const configuredHash = process.env.DAYKIT_ACCESS_CODE_HASH?.trim();
+
     const match = configuredHash?.match(
         /^scrypt:([a-f0-9]{32}):([a-f0-9]{128})$/,
     );
 
     if (!match) {
-        throw new Error("DAYKIT_ACCESS_CODE_HASH ontbreekt of is ongeldig.");
+        throw new Error(
+            "DAYKIT_ACCESS_CODE_HASH ontbreekt of is ongeldig.",
+        );
     }
 
     const actual = (await deriveKey(input, match[1], 64)) as Buffer;
@@ -204,8 +231,11 @@ export async function takeRateLimit(scope: string, limit: number) {
     const key = hashToken(scope);
 
     const rows = await sql`
-    INSERT INTO public.daykit_auth_rate_limit
-      (key_hash, attempts, window_started_at)
+    INSERT INTO public.daykit_auth_rate_limit (
+      key_hash,
+      attempts,
+      window_started_at
+    )
     VALUES (${key}, 1, now())
     ON CONFLICT (key_hash) DO UPDATE
     SET
@@ -263,8 +293,13 @@ export async function saveChallenge(
   `;
 
     await sql`
-    INSERT INTO public.daykit_auth_challenge
-      (token_hash, purpose, challenge, session_hash, expires_at)
+    INSERT INTO public.daykit_auth_challenge (
+      token_hash,
+      purpose,
+      challenge,
+      session_hash,
+      expires_at
+    )
     VALUES (
       ${hashToken(token)},
       ${purpose},
